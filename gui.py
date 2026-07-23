@@ -76,6 +76,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Top controls
         controls_layout = QtWidgets.QHBoxLayout()
         self.instrument_cb = QtWidgets.QComboBox()
+        self.instrument_cb.setEditable(True)
         self.instrument_cb.addItems(["NAS100", "XAUUSD", "EURUSD", "GBPUSD", "BTCUSD"])
         self.htf_cb = QtWidgets.QComboBox()
         self.htf_cb.addItems(["4H", "1H", "15M"])
