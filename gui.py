@@ -1,0 +1,1 @@
+$(cat /workspace/user/gui.py)
