@@ -5,7 +5,7 @@ import MetaTrader5 as mt5
 # Project modules
 from mt5_provider import MT5Provider
 from config import Config
-from session_detector import SessionDetector
+# from session_detector import SessionDetector  # removed
 from poi_detectors import POIDetector
 from entry_detectors import EntryDetector
 from alert_engine import AlertEngine
