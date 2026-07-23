@@ -28,7 +28,7 @@ class Config:
     session_filters: List[str] = field(default_factory=lambda: [
         "Asia", "London", "NY", "NY_Judas", "NY_Equity_Open", "Silver_Bullet"
     ])
-    risk: RiskRule = RiskRule()
+    risk: RiskRule = field(default_factory=RiskRule)
     beep_enabled: bool = True
     sound_file: str = ""
 
