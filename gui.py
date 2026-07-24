@@ -1,3 +1,4 @@
+# Updated gui.py with timestamp conversion, price extraction, session detection, and clean formatting.
 import sys
 from PySide6 import QtWidgets, QtCore, QtGui
 import MetaTrader5 as mt5
@@ -6,6 +7,13 @@ import MetaTrader5 as mt5
 # from mt5_provider import MT5Provider  # removed as we fetch ticks directly
 from config import Config
 # from session_detector import SessionDetector  # removed
+
+# Attempt to import SessionDetector if available
+try:
+    from session_detector import SessionDetector
+    session_detector = SessionDetector()
+except Exception:
+    session_detector = None
 
 class MT5Connector(QtCore.QObject):
     connected = QtCore.Signal()
@@ -187,13 +195,37 @@ class MainWindow(QtWidgets.QMainWindow):
     def process_tick(self, tick_data: dict):
         """Handle a new tick emitted from :class:`ScannerThread`.
 
-        The original implementation simply stringified the dictionary, which
-        resulted in an unstructured view and made the live feed appear blank
-        when the widget was not refreshed correctly.  This method now delegates
-        to ``update_live_feed`` which formats the tick information into a
-        concise, column‑aligned string.
+        This method now converts Unix epoch timestamps to a readable format,
+        extracts a price (bid, ask, or last), determines the session if a
+        ``SessionDetector`` is available, and forwards a cleanly formatted
+        dictionary to ``update_live_feed``.
         """
-        self.update_live_feed(tick_data)
+        # Convert epoch timestamp to local time string if present
+        timestamp = tick_data.get('time')
+        if isinstance(timestamp, (int, float)):
+            # Assume timestamp is seconds since epoch
+            dt = QtCore.QDateTime.fromSecsSinceEpoch(int(timestamp))
+            time_str = dt.toString("yyyy-MM-dd HH:mm:ss")
+        else:
+            time_str = QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
+        # Extract price: prefer bid, then ask, then last
+        price = tick_data.get('bid') or tick_data.get('ask') or tick_data.get('last') or ''
+        # Determine session if detector available
+        session = ''
+        if session_detector is not None:
+            try:
+                session = session_detector.current_session(tick_data) or ''
+            except Exception:
+                session = ''
+        # Build formatted dict
+        formatted = {
+            "time": time_str,
+            "price": price,
+            "session": session,
+            "status": "Tick",
+            "details": "",
+        }
+        self.update_live_feed(formatted)
 
     def update_live_feed(self, data: dict):
         """Append a formatted line to the live feed view.
