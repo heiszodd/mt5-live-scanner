@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QComboBox,
 )
-from PySide6.QtCore import Qt, QTimer, QDateTime, QFont
+from PySide6.QtCore import Qt, QTimer, QDateTime
+from PySide6.QtGui import QFont
 
 class LiveScannerGUI(QWidget):
     def __init__(self):
