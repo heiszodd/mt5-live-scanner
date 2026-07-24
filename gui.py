@@ -161,7 +161,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scanner_thread.finished.connect(self.scanner_finished)
         self.scanner_thread.start()
         self.start_button.setText("Stop Scanner")
-        self.feed_view.append("Scanner started for {}...".format(symbol))
+        # Emit an immediate status log to the live feed
+        self.update_live_feed({
+            "time": QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss"),
+            "price": "",
+            "session": "",
+            "status": f"Scanner started for {symbol}",
+            "details": "",
+        })
 
     def stop_scanner(self):
         if self.scanner_thread:
@@ -175,12 +182,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self.feed_view.append("Scanner thread finished.")
 
     def process_tick(self, tick_data: dict):
-        # For demonstration we just stringify the dict.
-        self.feed_view.append(str(tick_data))
-        # Here you could plug in POIDetector, EntryDetector, AlertEngine, etc.
-        # Example placeholder:
-        # if EntryDetector.detect(tick_data):
-        #     AlertEngine.alert("Entry signal detected", self.audio_checkbox.isChecked())
+        """Handle a new tick emitted from :class:`ScannerThread`.
+
+        The original implementation simply stringified the dictionary, which
+        resulted in an unstructured view and made the live feed appear blank
+        when the widget was not refreshed correctly.  This method now delegates
+        to ``update_live_feed`` which formats the tick information into a
+        concise, column‑aligned string.
+        """
+        self.update_live_feed(tick_data)
+
+    def update_live_feed(self, data: dict):
+        """Append a formatted line to the live feed view.
+
+        Expected keys in *data*:
+        - ``time``   – timestamp string (ISO or formatted)
+        - ``price``  – price value
+        - ``session``– trading session identifier (e.g. "NY", "EU")
+        - ``status`` – status text such as "Tick", "Signal", etc.
+        - ``details`` – optional extra information (POI/FVG/MSS).  Missing
+          keys are treated as empty strings.
+        """
+        time = data.get("time", QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+        price = str(data.get("price", ""))
+        session = str(data.get("session", ""))
+        status = str(data.get("status", ""))
+        details = str(data.get("details", ""))
+        line = f"{time} | {price} | {session} | {status} | {details}"
+        self.feed_view.append(line)
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
