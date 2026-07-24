@@ -130,6 +130,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.connector.connect(symbol)
         self.status_label.setText("Connecting...")
         self.status_label.setStyleSheet("color: orange;")
+        self.connect_button.setEnabled(False)
 
     def on_connected(self):
         self.status_label.setText("Connected")
