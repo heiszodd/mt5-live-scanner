@@ -127,10 +127,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if not symbol:
             QtWidgets.QMessageBox.warning(self, "Input Error", "Please enter a valid instrument symbol.")
             return
-        self.connector.connect(symbol)
+        # Update status before attempting connection
         self.status_label.setText("Connecting...")
         self.status_label.setStyleSheet("color: orange;")
         self.connect_button.setEnabled(False)
+        self.connector.connect(symbol)
 
     def on_connected(self):
         self.status_label.setText("Connected")
