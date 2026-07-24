@@ -5,7 +5,6 @@ import MetaTrader5 as mt5
 # Project modules
 from mt5_provider import MT5Provider
 from config import Config
-# from session_detector import SessionDetector  # removed
 
 class MT5Connector(QtCore.QObject):
     connected = QtCore.Signal()
@@ -13,11 +12,18 @@ class MT5Connector(QtCore.QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.account = None
+        self.password = None
+        self.server = None
         self.symbol = None
 
-    def connect(self, symbol: str):
-        self.symbol = symbol.upper()
-        if not mt5.initialize():
+    def login(self, account: str, password: str, server: str, symbol: str):
+        """Initialize MT5 connection with credentials and select symbol."""
+        self.account = account.strip()
+        self.password = password.strip()
+        self.server = server.strip()
+        self.symbol = symbol.upper().strip()
+        if not mt5.initialize(login=self.account, server=self.server, password=self.password):
             self.connection_failed.emit("MT5 initialization failed")
             return
         if not mt5.symbol_select(self.symbol, True):
@@ -49,196 +55,273 @@ class ScannerThread(QtCore.QThread):
                 try:
                     tick_dict = tick._asdict()
                 except Exception:
-                    # Fallback: convert attributes manually
                     tick_dict = {attr: getattr(tick, attr) for attr in dir(tick) if not attr.startswith('_') and not callable(getattr(tick, attr))}
                 self.tick.emit(tick_dict)
-            self.msleep(200)  # ~5 ticks per second
+            self.msleep(200)
         self.stopped.emit()
 
     def stop(self):
         self._running = False
 
+class HeaderCard(QtWidgets.QGroupBox):
+    """Top dashboard card showing live price, session, datetime, status and balances."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("Live Dashboard")
+        layout = QtWidgets.QGridLayout(self)
+        # Labels placeholders
+        self.price_label = QtWidgets.QLabel("Price: --")
+        self.session_label = QtWidgets.QLabel("Session: --")
+        self.datetime_label = QtWidgets.QLabel("Date/Time (WAT): --")
+        self.status_label = QtWidgets.QLabel("Status: Disconnected")
+        self.balance_label = QtWidgets.QLabel("Balance: --")
+        self.equity_label = QtWidgets.QLabel("Equity: --")
+        self.margin_label = QtWidgets.QLabel("Free Margin: --")
+        self.pl_label = QtWidgets.QLabel("Floating P/L: --")
+        # Arrange in grid
+        layout.addWidget(self.price_label, 0, 0)
+        layout.addWidget(self.session_label, 0, 1)
+        layout.addWidget(self.datetime_label, 0, 2)
+        layout.addWidget(self.status_label, 1, 0)
+        layout.addWidget(self.balance_label, 1, 1)
+        layout.addWidget(self.equity_label, 1, 2)
+        layout.addWidget(self.margin_label, 2, 0)
+        layout.addWidget(self.pl_label, 2, 1)
+
+    def update_datetime(self):
+        now = QtCore.QDateTime.currentDateTime()
+        self.datetime_label.setText(f"Date/Time (WAT): {now.toString('yyyy-MM-dd HH:mm:ss')}")
+
+class LoginControls(QtWidgets.QGroupBox):
+    """MT5 login fields and control buttons."""
+    login_requested = QtCore.Signal(str, str, str, str)
+    start_scanner = QtCore.Signal()
+    stop_scanner = QtCore.Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("MT5 Connection")
+        form = QtWidgets.QFormLayout(self)
+        self.account_edit = QtWidgets.QLineEdit()
+        self.password_edit = QtWidgets.QLineEdit()
+        self.password_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.server_edit = QtWidgets.QLineEdit()
+        self.symbol_edit = QtWidgets.QComboBox()
+        self.symbol_edit.setEditable(True)
+        self.symbol_edit.addItems(["XAUUSD", "NAS100", "US100", "EURUSD"])
+        form.addRow("Account #", self.account_edit)
+        form.addRow("Password", self.password_edit)
+        form.addRow("Server", self.server_edit)
+        form.addRow("Symbol", self.symbol_edit)
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.connect_btn = QtWidgets.QPushButton("Connect")
+        self.start_btn = QtWidgets.QPushButton("Start Scanner")
+        self.start_btn.setEnabled(False)
+        self.stop_btn = QtWidgets.QPushButton("Stop Scanner")
+        self.stop_btn.setEnabled(False)
+        btn_layout.addWidget(self.connect_btn)
+        btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.stop_btn)
+        form.addRow(btn_layout)
+        self.connect_btn.clicked.connect(self._on_connect)
+        self.start_btn.clicked.connect(lambda: self.start_scanner.emit())
+        self.stop_btn.clicked.connect(lambda: self.stop_scanner.emit())
+
+    def _on_connect(self):
+        account = self.account_edit.text()
+        password = self.password_edit.text()
+        server = self.server_edit.text()
+        symbol = self.symbol_edit.currentText()
+        self.login_requested.emit(account, password, server, symbol)
+
+    def set_connected(self, ok: bool):
+        self.start_btn.setEnabled(ok)
+        self.stop_btn.setEnabled(False)
+        self.connect_btn.setEnabled(not ok)
+
+    def set_scanning(self, scanning: bool):
+        self.start_btn.setEnabled(not scanning)
+        self.stop_btn.setEnabled(scanning)
+        self.connect_btn.setEnabled(not scanning)
+
+class PositionsTable(QtWidgets.QGroupBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("Open Positions")
+        layout = QtWidgets.QVBoxLayout(self)
+        self.table = QtWidgets.QTableWidget(0, 8)
+        self.table.setHorizontalHeaderLabels(["Ticket", "Symbol", "Type", "Lots", "Open Price", "Current Price", "SL", "TP", "Profit"])
+        self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        layout.addWidget(self.table)
+
+    def update_positions(self, positions):
+        self.table.setRowCount(len(positions))
+        for row, pos in enumerate(positions):
+            for col, key in enumerate(["ticket", "symbol", "type", "lots", "price_open", "price_current", "sl", "tp", "profit"]):
+                item = QtWidgets.QTableWidgetItem(str(pos.get(key, "")))
+                self.table.setItem(row, col, item)
+
+class HistoryTable(QtWidgets.QGroupBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("Trade History")
+        layout = QtWidgets.QVBoxLayout(self)
+        self.table = QtWidgets.QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Ticket", "Symbol", "Type", "Lots", "Close Price", "Profit"])
+        self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        layout.addWidget(self.table)
+
+    def update_history(self, history):
+        self.table.setRowCount(len(history))
+        for row, tr in enumerate(history):
+            for col, key in enumerate(["ticket", "symbol", "type", "lots", "price_close", "profit"]):
+                item = QtWidgets.QTableWidgetItem(str(tr.get(key, "")))
+                self.table.setItem(row, col, item)
+
+class EventLog(QtWidgets.QGroupBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("Event Log")
+        layout = QtWidgets.QVBoxLayout(self)
+        self.log_view = QtWidgets.QTextEdit()
+        self.log_view.setReadOnly(True)
+        layout.addWidget(self.log_view)
+
+    def append(self, text: str):
+        timestamp = QtCore.QDateTime.currentDateTime().toString('yyyy-MM-dd HH:mm:ss')
+        self.log_view.append(f"[{timestamp}] {text}")
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MT5 Live Scanner")
-        self.resize(900, 600)
+        self.setWindowTitle("MT5 Live Scanner – Modern Dashboard")
+        self.resize(1200, 800)
         self.connector = MT5Connector()
         self.scanner_thread = None
         self._setup_ui()
         self._connect_signals()
+        # Timer for datetime updates
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.header.update_datetime)
+        self.timer.start(1000)
 
     def _setup_ui(self):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
-        layout = QtWidgets.QVBoxLayout(central)
-
-        # Top controls
-        top_bar = QtWidgets.QHBoxLayout()
-        self.instrument_input = QtWidgets.QComboBox()
-        self.instrument_input.setEditable(True)
-        presets = ["NAS100", "XAUUSD", "US100", "GOLD"]
-        self.instrument_input.addItems(presets)
-        self.instrument_input.setCurrentText(presets[0])
-        top_bar.addWidget(QtWidgets.QLabel("Instrument:"))
-        top_bar.addWidget(self.instrument_input)
-        self.connect_button = QtWidgets.QPushButton("Connect MT5")
-        top_bar.addWidget(self.connect_button)
-        self.status_label = QtWidgets.QLabel("Disconnected")
-        self.status_label.setStyleSheet("color: red;")
-        top_bar.addWidget(self.status_label)
-        layout.addLayout(top_bar)
-
-        # Start/Stop button
-        self.start_button = QtWidgets.QPushButton("Start Scanner")
-        self.start_button.setEnabled(False)
-        layout.addWidget(self.start_button)
-
-        # Tab widget
-        self.tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.tabs)
-
-        # Live Feed tab
-        self.feed_tab = QtWidgets.QWidget()
-        self.feed_layout = QtWidgets.QVBoxLayout(self.feed_tab)
-        self.feed_view = QtWidgets.QTextEdit()
-        self.feed_view.setReadOnly(True)
-        self.feed_layout.addWidget(self.feed_view)
-        self.tabs.addTab(self.feed_tab, "Live Feed")
-
-        # Strategy Rules tab (placeholder for ZSP Model)
-        self.rules_tab = QtWidgets.QWidget()
-        self.rules_layout = QtWidgets.QVBoxLayout(self.rules_tab)
-        self.rules_label = QtWidgets.QLabel("ZSP Model strategy rules will be displayed here.")
-        self.rules_layout.addWidget(self.rules_label)
-        self.tabs.addTab(self.rules_tab, "Strategy Rules")
-
-        # Settings tab
-        self.settings_tab = QtWidgets.QWidget()
-        self.settings_layout = QtWidgets.QFormLayout(self.settings_tab)
-        self.audio_checkbox = QtWidgets.QCheckBox("Enable Audio Alerts")
-        self.audio_checkbox.setChecked(True)
-        self.settings_layout.addRow(self.audio_checkbox)
-        self.tabs.addTab(self.settings_tab, "Settings")
+        main_layout = QtWidgets.QVBoxLayout(central)
+        # Header
+        self.header = HeaderCard()
+        main_layout.addWidget(self.header)
+        # Controls
+        self.controls = LoginControls()
+        main_layout.addWidget(self.controls)
+        # Splitter for tables and log
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.positions = PositionsTable()
+        self.history = HistoryTable()
+        self.log = EventLog()
+        upper = QtWidgets.QWidget()
+        upper_layout = QtWidgets.QHBoxLayout(upper)
+        upper_layout.addWidget(self.positions)
+        upper_layout.addWidget(self.history)
+        splitter.addWidget(upper)
+        splitter.addWidget(self.log)
+        main_layout.addWidget(splitter)
 
     def _connect_signals(self):
-        self.connect_button.clicked.connect(self.handle_connect)
-        self.start_button.clicked.connect(self.toggle_scanner)
+        self.controls.login_requested.connect(self.handle_login)
+        self.controls.start_scanner.connect(self.start_scanner)
+        self.controls.stop_scanner.connect(self.stop_scanner)
         self.connector.connected.connect(self.on_connected)
         self.connector.connection_failed.connect(self.on_connection_failed)
 
-    def handle_connect(self):
-        symbol = self.instrument_input.currentText().strip()
-        if not symbol:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Please enter a valid instrument symbol.")
-            return
-        self.status_label.setText("Connecting...")
-        self.status_label.setStyleSheet("color: orange;")
-        self.connect_button.setEnabled(False)
-        self.connector.connect(symbol)
+    def handle_login(self, account, password, server, symbol):
+        self.log.append("Attempting MT5 connection...")
+        self.controls.connect_btn.setEnabled(False)
+        self.connector.login(account, password, server, symbol)
 
     def on_connected(self):
-        self.status_label.setText("Connected")
-        self.status_label.setStyleSheet("color: green;")
-        self.start_button.setEnabled(True)
-        QtWidgets.QMessageBox.information(self, "MT5", f"Successfully connected to {self.connector.symbol}")
+        self.log.append("MT5 connected successfully.")
+        self.header.status_label.setText("Status: Connected")
+        self.header.status_label.setStyleSheet("color: green;")
+        self.controls.set_connected(True)
+        # Populate live price placeholder
+        self.update_price_placeholder()
 
     def on_connection_failed(self, msg: str):
-        self.status_label.setText("Connection Failed")
-        self.status_label.setStyleSheet("color: red;")
-        self.start_button.setEnabled(False)
+        self.log.append(f"Connection failed: {msg}")
+        self.header.status_label.setText("Status: Connection Failed")
+        self.header.status_label.setStyleSheet("color: red;")
+        self.controls.set_connected(False)
         QtWidgets.QMessageBox.critical(self, "MT5 Connection Failed", msg)
 
-    def toggle_scanner(self):
-        if self.scanner_thread and self.scanner_thread.isRunning():
-            self.stop_scanner()
-        else:
-            self.start_scanner()
-
     def start_scanner(self):
-        symbol = self.connector.symbol
-        if not symbol:
+        if not self.connector.symbol:
             QtWidgets.QMessageBox.warning(self, "Error", "No symbol connected.")
             return
-        self.scanner_thread = ScannerThread(symbol)
+        self.scanner_thread = ScannerThread(self.connector.symbol)
         self.scanner_thread.tick.connect(self.process_tick)
         self.scanner_thread.finished.connect(self.scanner_finished)
         self.scanner_thread.start()
-        self.start_button.setText("Stop Scanner")
-        self.update_live_feed({
-            "time": QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss"),
-            "price": "",
-            "session": "",
-            "status": f"Scanner started for {symbol}",
-            "details": "",
-        })
+        self.log.append("Scanner started.")
+        self.header.status_label.setText("Status: Scanning")
+        self.header.status_label.setStyleSheet("color: blue;")
+        self.controls.set_scanning(True)
 
     def stop_scanner(self):
         if self.scanner_thread:
             self.scanner_thread.stop()
             self.scanner_thread.wait()
-        self.start_button.setText("Start Scanner")
-        self.feed_view.append("Scanner stopped.")
+        self.log.append("Scanner stopped.")
+        self.header.status_label.setText("Status: Connected")
+        self.header.status_label.setStyleSheet("color: green;")
+        self.controls.set_scanning(False)
 
     def scanner_finished(self):
-        self.start_button.setText("Start Scanner")
-        self.feed_view.append("Scanner thread finished.")
+        self.log.append("Scanner thread finished.")
+        self.controls.set_scanning(False)
+        self.header.status_label.setText("Status: Connected")
+        self.header.status_label.setStyleSheet("color: green;")
 
     def process_tick(self, tick_data: dict):
-        """Handle a new tick emitted from the ScannerThread.
+        # Update price in header
+        price = tick_data.get('last') or tick_data.get('bid')
+        if isinstance(price, (int, float)):
+            self.header.price_label.setText(f"Price: {price:.5f}")
+        else:
+            self.header.price_label.setText(f"Price: {price}")
+        # Simple session inference based on time (placeholder)
+        hour = QtCore.QTime.currentTime().hour()
+        if 0 <= hour < 8:
+            session = "Asian"
+        elif 8 <= hour < 16:
+            session = "London"
+        else:
+            session = "NY"
+        self.header.session_label.setText(f"Session: {session}")
+        # Log tick
+        self.log.append(f"Tick received: {price}")
+        # Here you would query MT5 for account balances and positions; placeholders:
+        self.header.balance_label.setText("Balance: --")
+        self.header.equity_label.setText("Equity: --")
+        self.header.margin_label.setText("Free Margin: --")
+        self.header.pl_label.setText("Floating P/L: --")
+        # Update positions table (placeholder empty list)
+        # self.positions.update_positions([])
+        # Update history table (placeholder)
+        # self.history.update_history([])
 
-        The thread provides a plain ``dict`` representation of the ``MqlTick``
-        named‑tuple returned by ``mt5.symbol_info_tick``.  The UI expects a
-        specific set of keys (time, price, session, status and details).  This
-        method extracts the relevant fields, performs necessary type
-        conversions, and builds a new dictionary matching that contract.
-        """
-        # Convert epoch time to a human‑readable string.
-        raw_time = tick_data.get("time")
-        if raw_time is not None:
+    def update_price_placeholder(self):
+        # Pull initial price once after connection
+        tick = mt5.symbol_info_tick(self.connector.symbol)
+        if tick:
             try:
-                dt = QtCore.QDateTime.fromSecsSinceEpoch(int(raw_time))
-                time_str = dt.toString("yyyy-MM-dd HH:mm:ss")
+                price = tick.last if hasattr(tick, 'last') else tick.bid
+                self.header.price_label.setText(f"Price: {price:.5f}")
             except Exception:
-                time_str = QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
-        else:
-            time_str = QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
-        # Choose price: first ``last`` then ``bid``.
-        price_val = tick_data.get("last") or tick_data.get("bid")
-        if isinstance(price_val, (int, float)):
-            price_str = f"{price_val:.5f}"
-        else:
-            price_str = str(price_val or "")
-        session_str = ""
-        status_str = "Tick"
-        volume = tick_data.get("volume")
-        details_str = f"vol:{volume}" if volume is not None else ""
-        formatted = {
-            "time": time_str,
-            "price": price_str,
-            "session": session_str,
-            "status": status_str,
-            "details": details_str,
-        }
-        self.update_live_feed(formatted)
-
-    def update_live_feed(self, data: dict):
-        """Append a formatted row to the live‑feed text view.
-
-        ``data`` should contain the keys ``time``, ``price``, ``session``,
-        ``status`` and ``details``.  Missing values are rendered as empty strings.
-        """
-        row = " | ".join([
-            data.get("time", ""),
-            data.get("price", ""),
-            data.get("session", ""),
-            data.get("status", ""),
-            data.get("details", ""),
-        ])
-        self.feed_view.append(row)
+                pass
 
     def closeEvent(self, event):
-        # Ensure MT5 shutdown on exit.
         if self.scanner_thread and self.scanner_thread.isRunning():
             self.scanner_thread.stop()
             self.scanner_thread.wait()
