@@ -3,7 +3,7 @@ from PySide6 import QtWidgets, QtCore, QtGui
 import MetaTrader5 as mt5
 
 # Project modules
-from mt5_provider import MT5Provider
+# from mt5_provider import MT5Provider  # removed as we fetch ticks directly
 from config import Config
 # from session_detector import SessionDetector  # removed
 
@@ -40,12 +40,15 @@ class ScannerThread(QtCore.QThread):
         super().__init__(parent)
         self.symbol = symbol
         self._running = True
-        self.provider = MT5Provider()
+        # self.provider = MT5Provider()  # no longer needed
 
     def run(self):
         while self._running:
-            tick_data = self.provider.get_tick(self.symbol)
-            if tick_data:
+            # Retrieve the tick directly from MetaTrader5 instead of using a provider.
+            raw_tick = mt5.symbol_info_tick(self.symbol)
+            if raw_tick:
+                # Convert the namedtuple to a dictionary for consistency.
+                tick_data = raw_tick._asdict()
                 self.tick.emit(tick_data)
             self.msleep(200)  # 5 ticks per second approx.
         self.stopped.emit()
